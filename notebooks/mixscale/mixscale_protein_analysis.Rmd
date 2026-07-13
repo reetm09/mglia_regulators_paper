@@ -1,0 +1,274 @@
+---
+title: "mixscale_protein_analysis"
+author: "Reet Mishra"
+date: "2026-03-27"
+output: html_document
+---
+```{r setup, include="False"}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+# Mixscale Protein DAP calculation for Perturbation-Specific Volcano Plots and DEG Supplementary Tables for Figure 3D,3E,3F,3J,3K,3L
+
+# Imports
+```{r imports}
+library(MuDataSeurat)
+library(Seurat)
+library(ggridges)
+library(patchwork)
+library(scales)
+library(dplyr)
+library(reshape2)
+devtools::install_github("reetm09/MixscaleBH")
+library(MixscaleBH)
+library(presto)
+library(ComplexHeatmap)
+library(circlize)
+library(grid)
+library(EnhancedVolcano)
+library(magick)
+```
+
+# Read Data
+```{r read_data, echo="False"}
+
+data_dir = "<path to processed data>"
+cite_6tf_path = paste0(data_dir, "cite_6tf_cleaned_revisions.h5mu")
+cite_imgl_path = paste0(data_dir, "cite_imgl_cleaned_revisions.h5mu")
+merged_6tf_path = paste0(data_dir, "adata_revisions_merged_6tf.h5ad")
+
+h5mu_6tf <- ReadH5MU(cite_6tf_path)
+h5mu_imgl <- ReadH5MU(cite_imgl_path)
+```
+
+# Subset Data
+```{r subset_data}
+
+# remove not needed guides
+guides_to_exclude <- c("FOXK1_g2", "non-targeting_g5")
+
+
+# iMG
+all_guides = levels(h5mu_imgl$guide)
+guides_to_keep = all_guides[!all_guides %in% guides_to_exclude]
+
+h5mu_imgl_clean <- subset(h5mu_imgl, subset = guide %in% guides_to_keep)
+h5mu_imgl_clean$guide <- droplevels(h5mu_imgl_clean$guide)
+
+
+# iTF
+all_guides = levels(h5mu_6tf$guide)
+guides_to_keep = all_guides[!all_guides %in% guides_to_exclude]
+
+h5mu_6tf_clean <- subset(h5mu_6tf, subset = guide %in% guides_to_keep)
+h5mu_6tf_clean$guide <- droplevels(h5mu_6tf_clean$guide)
+
+```
+
+
+# DEG Class
+```{r set_class_for_perturb_analysis}
+deg_class <- 'perturbed_gene'
+
+Idents(object = h5mu_imgl_clean) <- deg_class
+Idents(object = h5mu_6tf_clean) <- deg_class
+
+```
+
+# Calculate Perturb Effect
+```{r calc_perturb_effect}
+
+prot_imgl_clean <- CalcPerturbSig(
+    h5mu_imgl_clean,
+    assay = "prot",
+    slot = "data",
+    gd.class = deg_class,
+    nt.cell.class = "NTC",
+    reduction = "PCA",
+    ndims = 40,
+    num.neighbors = 20, 
+    new.assay.name = "PRTB",
+    verbose = TRUE,
+    split.by = NULL
+)
+
+prot_6tf_clean <- CalcPerturbSig(
+    h5mu_6tf_clean,
+    assay = "prot",
+    slot = "data",
+    gd.class = deg_class,
+    nt.cell.class = "NTC",
+    reduction = "PCA",
+    ndims = 40,
+    num.neighbors = 20, 
+    new.assay.name = "PRTB",
+    verbose = TRUE,
+    split.by = NULL
+)
+
+```
+
+
+# Run Mixscale
+```{r run_mixscale}
+
+prot_imgl_clean_mixscaled <- RunMixscale(
+         object = prot_imgl_clean, 
+         assay = "PRTB", 
+         slot = "scale.data", 
+         labels = deg_class, 
+         nt.class.name = "NTC", 
+         fine.mode = TRUE,
+         fine.mode.labels = "perturbed_guide",
+         max.de.genes = 500,
+         min.de.genes = 3, 
+         logfc.threshold = 0,
+         min.cells = 1,
+         min_prop_ntgd = 0,
+         de.assay = "prot",
+         harmonize = FALSE,
+         new.class.name = "mixscale_score", 
+         verbose = TRUE, 
+         split.by = NULL,
+  )
+
+prot_6tf_clean_mixscaled <- RunMixscale(
+         object = prot_6tf_clean, 
+         assay = "PRTB", 
+         slot = "scale.data", 
+         labels = deg_class, 
+         nt.class.name = "NTC", 
+         fine.mode = TRUE,
+         fine.mode.labels = "perturbed_guide",
+         max.de.genes = 500,
+         min.de.genes = 3, 
+         logfc.threshold = 0,
+         min.cells = 1,
+         min_prop_ntgd = 0,
+         de.assay = "prot",
+         harmonize = FALSE,
+         new.class.name = "mixscale_score", 
+         verbose = TRUE, 
+         split.by = NULL,
+     )
+
+
+```
+
+# Build Ridge Plots for genes
+```{r build_ridge_plots}
+
+RidgePlot(
+    prot_6tf_clean_mixscaled,
+    features = "mixscale_score",
+    group.by = deg_class, sort="decreasing") + NoLegend()
+
+RidgePlot(
+    prot_imgl_clean_mixscaled,
+    features = "mixscale_score",
+    group.by = deg_class, sort="decreasing") + NoLegend()
+
+
+
+```
+
+```{r get_levels_pert_genes}
+# assigning unique perturbed genes per dataframe, including all mixscale scores, even less than 0
+levels_pert_genes_6tf <- levels(prot_6tf_clean_mixscaled$perturbed_gene)
+levels_pert_genes_imgl <- levels(prot_imgl_clean_mixscaled$perturbed_gene)
+
+print(levels_pert_genes_imgl == levels_pert_genes_6tf)
+
+```
+
+# Build Weighted DEGs
+```{r build_weighted_degs}
+
+de_res_prot_imgl_clean_mixscaled = Run_wmvRegDE(object = prot_imgl_clean_mixscaled, 
+                      assay = "prot", 
+                      slot = "counts",
+                      labels = "perturbed_gene", 
+                      nt.class.name = "NTC", 
+                      PRTB_list = levels_pert_genes_imgl,
+                      total_ct_labels = "nCount_prot",
+                      logfc.threshold = 0, 
+                      pseudocount.use = 1,
+                      min.pct = 0, 
+                      min.cells.group = 1,
+                      split.by = NULL)
+
+
+# check for each df in de_res_rna_imgl_clean_mixscaled if there are any NA values
+for (gene in levels_pert_genes_imgl) {
+    na_count <- sum(is.na(de_res_prot_imgl_clean_mixscaled[[gene]]$log2fc))
+    if (na_count > 0) {
+        print(paste0("Perturbed Gene ", gene, " has ", na_count, " NA values in log2fc"))
+    } else {
+        print(paste0("Perturbed Gene ", gene, " has no NA values in log2fc"))
+    }
+}
+
+table(is.na(de_res_prot_imgl_clean_mixscaled))
+
+de_res_prot_6tf_clean_mixscaled = Run_wmvRegDE(object = prot_6tf_clean_mixscaled, 
+                      assay = "prot", 
+                      slot = "counts",
+                      labels = "perturbed_gene", 
+                      nt.class.name = "NTC", 
+                      PRTB_list = levels_pert_genes_6tf,
+                      total_ct_labels = "nCount_prot",
+                      logfc.threshold = 0, 
+                      pseudocount.use = 1,
+                      min.pct = 0, 
+                      min.cells.group = 1,
+                      split.by = NULL)
+
+#ms_6tf <- Tool(prot_6tf_clean_mixscaled, slot = "RunMixscale")
+#ms_imgl <- Tool(prot_imgl_clean_mixscaled, slot = "RunMixscale")
+
+```
+
+
+```{r save_deg_dfs}
+
+for (perturbed_gene in levels_pert_genes_6tf) {
+    de_res <- de_res_prot_6tf_clean_mixscaled[[perturbed_gene]]
+    sig_de_res <- de_res[de_res$p_weight < 0.05,]
+    sig_de_res$adj_p_weight <- p.adjust(sig_de_res$p_weight, method = "BH")
+    de_res$adj_p_weight <- p.adjust(de_res$p_weight, method = "BH")
+    write.csv(sig_de_res, file = paste0("<path to DEG directory>","merged_6tf_mixscale_degs_sig_prot_", perturbed_gene, ".csv"), row.names = FALSE)
+     write.csv(de_res, file = paste0("<path to DEG directory>","merged_6tf_mixscale_degs_all_prot_", perturbed_gene, ".csv"), row.names = FALSE)
+}
+
+for (perturbed_gene in levels_pert_genes_imgl) {
+    de_res <- de_res_prot_imgl_clean_mixscaled[[perturbed_gene]]
+    sig_de_res <- de_res[de_res$p_weight < 0.05,]
+    sig_de_res$adj_p_weight <- p.adjust(sig_de_res$p_weight, method = "BH")
+    de_res$adj_p_weight <- p.adjust(de_res$p_weight, method = "BH")
+    write.csv(sig_de_res, file = paste0("<path to DEG directory>","cite_imgl_mixscale_degs_sig_prot_", perturbed_gene, ".csv"), row.names = FALSE)
+    write.csv(de_res, file = paste0("<path to DEG directory>","cite_imgl_mixscale_degs_all_prot_", perturbed_gene, ".csv"), row.names = FALSE)
+}
+
+```
+
+
+# Save Mixscale Objects and Scores
+```{r save_mixscale_objects}
+
+out_dir <-  "<path to output processed data directory>"
+saveRDS(prot_imgl_clean_mixscaled, file = paste0(out_dir, "prot_imgl_clean_mixscaled.rds"))
+saveRDS(prot_6tf_clean_mixscaled, file = paste0(out_dir, "prot_6tf_clean_mixscaled.rds"))
+
+
+```
+
+``` {r saving_mixscale_score} 
+
+filename_cite_6tf <- paste0(out_dir, "cite_6tf_prot_mixscale_score.csv")
+filename_cite_imgl <- paste0(out_dir, "cite_imgl_prot_mixscale_score.csv")
+
+write.csv(prot_6tf_clean_mixscaled@meta.data[, c("mixscale_score")], filename_cite_6tf, row.names = TRUE)
+write.csv(prot_imgl_clean_mixscaled@meta.data[, c("mixscale_score")], filename_cite_imgl, row.names = TRUE)
+
+```

@@ -1,0 +1,596 @@
+---
+title: "mixscale_prot_visualization"
+author: "Reet Mishra"
+date: "2026-03-27"
+output: html_document
+---
+
+```{r setup, include="False"}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Perturbation-Specific Protein Volcano Plots and DAP Supplementary Tables for Figure 3D,3E,3F,3J,3K,3L
+
+# Imports
+```{r imports}
+library(MuDataSeurat)
+library(Seurat)
+library(ggridges)
+library(patchwork)
+library(scales)
+library(dplyr)
+library(reshape2)
+devtools::install_github("reetm09/MixscaleBH")
+library(MixscaleBH)
+library(presto)
+library(ComplexHeatmap)
+library(circlize)
+library(grid)
+library(EnhancedVolcano)
+library(magick)
+library(svglite)
+```
+
+# Read Objects
+``` {r read_objects}
+
+# Read in objects
+data_dir = "<path to processed data>"
+prot_img <- readRDS(paste0(data_dir, "prot_imgl_clean_mixscaled.rds")
+prot_itf <- readRDS(paste0(data_dir, "prot_6tf_clean_mixscaled.rds")
+```
+
+
+# Get Levels
+``` {r get_levels}
+levels_pert_genes_prot_img <- levels(prot_img$perturbed_gene)
+levels_pert_genes_prot_itf <- levels(prot_itf$perturbed_gene)
+```
+
+# Read DEG dataframes
+``` {r read_deg_dfs}
+
+# Read in DEG dataframes
+de_res_prot_6tf_all <- list()
+for (perturbed_gene in levels_pert_genes_prot_itf) {
+    de_res_path <- paste0("<path to deg directory>","merged_6tf_mixscale_degs_all_prot_", perturbed_gene, ".csv")
+    if (!file.exists(de_res_path)) {
+        print(paste0("File does not exist for gene: ", perturbed_gene))
+        next
+    }
+    de_res <- read.csv(de_res_path)
+    de_res_prot_6tf_all[[perturbed_gene]] <- de_res
+}
+
+de_res_prot_img_all <- list()
+for (perturbed_gene in levels_pert_genes_prot_img) {
+    de_res_path <- paste0("<path to deg directory>","cite_imgl_mixscale_degs_all_prot_", perturbed_gene, ".csv")
+    if (!file.exists(de_res_path)) {
+        print(paste0("File does not exist for gene: ", perturbed_gene))
+        next
+    }
+    de_res <- read.csv(de_res_path)
+    de_res_prot_img_all[[perturbed_gene]] <- de_res
+}
+```
+
+# Define Signatures
+```{r define_signatures}
+signature_path <- "<path to reference state gene families, table S2 tab 2>"
+
+correlations_itf_path <- "../ref/ProteinCorrelationSignatures_itf.csv"
+correlations_img_path <- "../ref/ProteinCorrelationSignatures_img.csv"
+
+signature_df_itf <- read.csv(correlations_itf_path)
+ifn_genes_itf <- signature_df_itf[(signature_df_itf$Interferon != ""),]$Interferon
+dam_genes_itf <- signature_df_itf[(signature_df_itf$Disease.responsive != ""),]$Disease.responsive
+chem_genes_itf <- signature_df_itf[(signature_df_itf$Chemokine != ""),]$Chemokine
+hom_genes_itf <- signature_df_itf[(signature_df_itf$Homeostatic != ""),]$Homeostatic
+ldam_genes_itf <- signature_df_itf[(signature_df_itf$Lipid.high != ""),]$Lipid.high
+ap_genes_itf <- signature_df_itf[(signature_df_itf$Antigen.presenting != ""),]$Antigen.presenting
+control_genes <- c("Control_hamster_IgG",
+        "Control_mouse_IgG1K",
+        "Control_mouse_IgG2aK",
+        "Control_mouse_IgG2bK",
+        "Control_rat_IgG1K",
+        "Control_rat_IgG1L",
+        "Control_rat_IgG2aK",
+        "Control_rat_IgG2bK",
+        "Control_rat_IgG2cK","IgD", "IgE", "IgK", "IgL", "IgM")
+
+signature_df_img <- read.csv(correlations_img_path)
+ifn_genes_img <- signature_df_img[(signature_df_img$Interferon != ""),]$Interferon
+dam_genes_img <- signature_df_img[(signature_df_img$Disease.responsive != ""),]$Disease.responsive
+chem_gene_img <- signature_df_img[(signature_df_img$Chemokine != ""),]$Chemokine
+hom_genes_img <- signature_df_img[(signature_df_img$Homeostatic != ""),]$Homeostatic
+ldam_genes_img <- signature_df_img[(signature_df_img$Lipid.high != ""),]$Lipid.high
+ap_genes_img <- signature_df_img[(signature_df_img$Antigen.presenting != ""),]$Antigen.presenting
+
+colmap <- c(
+    DAM = "#BF0063",
+    HOM = "#107B35",
+    IFN = "#5FADAF",
+    CHM = "#A335C2",
+    LDM = "#E76333",
+    APR = "#FDAC10",
+    CTRL = "#000000",
+    NSIG = "#D6D6D6",
+    OTH = "#666666"
+)
+
+```
+
+# Volcano Plots
+``` {r volcano_plots}
+
+log2fcutoff <- 0
+fdr_cutoff <- 0.05
+
+#genes_to_include = c("DNMT1", "STAT2", "SMAD3", "IRF9")
+
+# Volcano plots for iTF
+volcano_plots_6tf <- list()
+for (perturbed_gene in levels_pert_genes_prot_itf) {
+#for (perturbed_gene in genes_to_include) {
+    if (!perturbed_gene %in% names(de_res_prot_6tf_all)) {
+        print(paste0("No DEG results for gene: ", perturbed_gene))
+        next
+    }
+    de_res <- de_res_prot_6tf_all[[perturbed_gene]]
+    
+    if (!all(c("log2FC", "adj_p_weight", "gene_ID") %in% colnames(de_res))) {
+        print(paste0("Missing columns in DEG results for gene: ", perturbed_gene))
+        next
+    }
+    cat <- ifelse(de_res$gene_ID %in% ifn_genes_itf, "IFN",
+         ifelse(de_res$gene_ID %in% chem_genes_itf, "CHM",
+         ifelse(de_res$gene_ID %in% control_genes, "CTRL",
+         ifelse(de_res$adj_p_weight > fdr_cutoff, "NSIG","OTH"))))
+    
+    de_res$cat <- cat
+    
+    de_res_ordered <- dplyr::bind_rows(
+    dplyr::filter(de_res, cat == "NSIG"),
+    dplyr::filter(de_res, cat == "OTH"),
+    dplyr::filter(de_res, cat %in% c("OTH", "NSIG") == FALSE)
+  )
+    
+    # Create volcano plot
+    keyvals <- unname(colmap[de_res_ordered$cat])
+    names(keyvals) <- de_res_ordered$cat  # legend labels
+    p <- EnhancedVolcano(de_res_ordered,
+                         lab = de_res_ordered$gene_ID,
+                         x = 'log2FC',
+                         y = 'adj_p_weight',
+                         title = paste0('Volcano Plot Mixscale Weighted - iTF Protein - ', perturbed_gene),
+                         pCutoff = fdr_cutoff,
+                         FCcutoff = log2fcutoff,
+                         pointSize = 3.0,
+                         labSize = 3.0,
+                         cutoffLineWidth = 0.6,
+                         colCustom = keyvals,
+                         selectLab = de_res_ordered[order(de_res_ordered$adj_p_weight), ]$gene_ID[1:40],
+                         drawConnectors = TRUE,
+                         colAlpha = 1.0,
+                         gridlines.major = FALSE,
+                         gridlines.minor = FALSE,
+                         legendPosition = "none",
+                         arrowheads = FALSE,
+                         max.overlaps = 20,
+                         xlim = c(round(min(de_res_ordered$log2FC)) - 0.5, round(max(de_res_ordered$log2FC)) + 0.5),
+                         ylim = c(0, max(-log10(de_res_ordered$adj_p_weight), na.rm = TRUE) + 1)
+                         #ylim = c(0, 50)
+                         )
+    
+    volcano_plots_6tf[[perturbed_gene]] <- p
+    fig_dir = "../figures/iTF/final/"
+    save_pdf_path = paste0(fig_dir, perturbed_gene,"_prot_volcano_iTF_labelled_corr.pdf")
+    save_svg_path <- file.path(fig_dir, paste0(perturbed_gene, "_prot_volcano_iTF_labelled_corr.svg"))
+    svglite(save_svg_path, width = 8, height = 8)
+    plot(p)
+    dev.off()
+    
+}
+
+# Volcano plots for iMG
+volcano_plots_img <- list()
+for (perturbed_gene in levels_pert_genes_prot_img) {
+    if (!perturbed_gene %in% names(de_res_prot_img_all)) {
+        print(paste0("No DEG results for gene: ", perturbed_gene))
+        next
+    }
+    de_res <- de_res_prot_img_all[[perturbed_gene]]
+    
+    # Check if the necessary columns are present
+    if (!all(c("log2FC", "adj_p_weight", "gene_ID") %in% colnames(de_res))) {
+        print(paste0("Missing columns in DEG results for gene: ", perturbed_gene))
+        next
+    }
+    cat <- ifelse(de_res$gene_ID %in% dam_genes_img, "DAM",
+         ifelse(de_res$gene_ID %in% ap_genes_img,  "APR",
+         ifelse(de_res$gene_ID %in% control_genes, "CTRL",
+         ifelse(de_res$adj_p_weight > fdr_cutoff, "NSIG","OTH"))))
+    
+    de_res$cat <- cat
+    
+    de_res_ordered <- dplyr::bind_rows(
+    dplyr::filter(de_res, cat == "NSIG"),
+    dplyr::filter(de_res, cat == "OTH"),
+    dplyr::filter(de_res, cat %in% c("OTH", "NSIG") == FALSE)
+  )
+    
+    # Create volcano plot
+    keyvals <- unname(colmap[de_res_ordered$cat])
+    names(keyvals) <- de_res_ordered$cat  # legend labels
+    p <- EnhancedVolcano(de_res_ordered,
+                         lab = de_res_ordered$gene_ID,
+                         x = 'log2FC',
+                         y = 'adj_p_weight',
+                         title = paste0('Volcano Plot Mixscale Weighted - iMG Protein - ', perturbed_gene),
+                         pCutoff = fdr_cutoff,
+                         FCcutoff = log2fcutoff,
+                         pointSize = 3.0,
+                         labSize = 3.0,
+                         cutoffLineWidth = 0.6,
+                         colCustom = keyvals,
+                         selectLab = de_res_ordered[order(de_res_ordered$adj_p_weight), ]$gene_ID[1:40],
+                         drawConnectors = TRUE,
+                         colAlpha = 1.0,
+                         gridlines.major = FALSE,
+                         gridlines.minor = FALSE,
+                         legendPosition = "none",
+                         arrowheads = FALSE,
+                         max.overlaps = 20,
+                         xlim = c(round(min(de_res_ordered$log2FC)) - 0.5, round(max(de_res_ordered$log2FC)) + 0.5),
+                         ylim = c(0, max(-log10(de_res_ordered$adj_p_weight), na.rm = TRUE) + 1),
+                         )
+    volcano_plots_img[[perturbed_gene]] <- p
+    fig_dir = "../figures/in_vitro/iMG/final/"
+    save_pdf_path = paste0(fig_dir, perturbed_gene,"_prot_volcano_iMG_labelled_corr.pdf")
+    save_svg_path <- file.path(fig_dir, paste0(perturbed_gene, "_prot_volcano_iMG_labelled_corr.svg"))
+    svglite(save_svg_path, width = 8, height = 8)
+    plot(p)
+    dev.off()
+    
+}
+```
+
+# Volcano Plots Final
+``` {r volcano_plots_final}
+
+log2fcutoff <- 0
+fdr_cutoff <- 0.05
+
+genes_to_include_itf <- c("DNMT1", "STAT2", "SMAD3", "IRF9")
+genes_to_include_img <- c("PRDM1", "ZNF532")
+# Volcano plots for iTF
+volcano_plots_6tf <- list()
+for (perturbed_gene in genes_to_include_itf) {
+    if (!perturbed_gene %in% names(de_res_prot_6tf_all)) {
+        print(paste0("No DEG results for gene: ", perturbed_gene))
+        next
+    }
+    de_res <- de_res_prot_6tf_all[[perturbed_gene]]
+    
+    # Check if the necessary columns are present
+    if (!all(c("log2FC", "adj_p_weight", "gene_ID") %in% colnames(de_res))) {
+        print(paste0("Missing columns in DEG results for gene: ", perturbed_gene))
+        next
+    }
+    cat <- ifelse(de_res$gene_ID %in% ifn_genes_itf, "IFN",
+         ifelse(de_res$gene_ID %in% chem_genes_itf, "CHM",
+         ifelse(de_res$gene_ID %in% control_genes, "CTRL",
+         ifelse(de_res$adj_p_weight > fdr_cutoff, "NSIG","OTH"))))
+    
+    de_res$cat <- cat
+    
+    de_res_ordered <- dplyr::bind_rows(
+    dplyr::filter(de_res, cat == "NSIG"),
+    dplyr::filter(de_res, cat == "OTH"),
+    dplyr::filter(de_res, cat %in% c("OTH", "NSIG") == FALSE)
+  )
+    
+    # Create volcano plot
+    keyvals <- unname(colmap[de_res_ordered$cat])
+    names(keyvals) <- de_res_ordered$cat  # legend labels
+    p <- EnhancedVolcano(de_res_ordered,
+                         lab = de_res_ordered$gene_ID,
+                         x = 'log2FC',
+                         y = 'adj_p_weight',
+                         title = paste0('Volcano Plot Mixscale Weighted - 6TF Protein - ', perturbed_gene),
+                         pCutoff = fdr_cutoff,
+                         FCcutoff = log2fcutoff,
+                         pointSize = 3.0,
+                         labSize = 3.0,
+                         cutoffLineWidth = 0.6,
+                         colCustom = keyvals,
+                         selectLab = "none",
+                         #selectLab = de_res_ordered[order(de_res_ordered$adj_p_weight), ]$gene_ID[1:40],
+                         drawConnectors = FALSE,
+                         colAlpha = 1.0,
+                         gridlines.major = FALSE,
+                         gridlines.minor = FALSE,
+                         legendPosition = "none",
+                         arrowheads = FALSE,
+                         max.overlaps = 20,
+                         xlim = c(round(min(de_res_ordered$log2FC)) - 0.5, round(max(de_res_ordered$log2FC)) + 0.5),
+                         ylim = c(0, max(-log10(de_res_ordered$adj_p_weight), na.rm = TRUE) + 1)
+                         #ylim = c(0, 50)
+                         )
+    
+    volcano_plots_6tf[[perturbed_gene]] <- p
+    fig_dir = "../figures/in_vitro/iTF/final/"
+    save_pdf_path = paste0(fig_dir, perturbed_gene,"_prot_volcano_iTF_final_corr.pdf")
+    save_svg_path <- file.path(fig_dir, paste0(perturbed_gene, "_prot_volcano_iTF_final_corr.svg"))
+    svglite(save_svg_path, width = 8, height = 8)
+    plot(p)
+    dev.off()
+    
+}
+
+# Volcano plots for iMG
+volcano_plots_img <- list()
+for (perturbed_gene in genes_to_include_img) {
+    if (!perturbed_gene %in% names(de_res_prot_img_all)) {
+        print(paste0("No DEG results for gene: ", perturbed_gene))
+        next
+    }
+    de_res <- de_res_prot_img_all[[perturbed_gene]]
+    
+    # Check if the necessary columns are present
+    if (!all(c("log2FC", "adj_p_weight", "gene_ID") %in% colnames(de_res))) {
+        print(paste0("Missing columns in DEG results for gene: ", perturbed_gene))
+        next
+    }
+    cat <- ifelse(de_res$gene_ID %in% dam_genes_img, "DAM",
+         ifelse(de_res$gene_ID %in% ap_genes_img,  "APR",
+         ifelse(de_res$gene_ID %in% control_genes, "CTRL",
+         ifelse(de_res$adj_p_weight > fdr_cutoff, "NSIG","OTH"))))
+    de_res$cat <- cat
+    
+    de_res_ordered <- dplyr::bind_rows(
+    dplyr::filter(de_res, cat == "NSIG"),
+    dplyr::filter(de_res, cat == "OTH"),
+    dplyr::filter(de_res, cat %in% c("OTH", "NSIG") == FALSE)
+  )
+    
+    # Create volcano plot
+    keyvals <- unname(colmap[de_res_ordered$cat])
+    names(keyvals) <- de_res_ordered$cat  # legend labels
+    p <- EnhancedVolcano(de_res_ordered,
+                         lab = de_res_ordered$gene_ID,
+                         x = 'log2FC',
+                         y = 'adj_p_weight',
+                         title = paste0('Volcano Plot Mixscale Weighted - IMGL - ', perturbed_gene),
+                         pCutoff = fdr_cutoff,
+                         FCcutoff = log2fcutoff,
+                         pointSize = 3.0,
+                         labSize = 3.0,
+                         cutoffLineWidth = 0.6,
+                         colCustom = keyvals,
+                         selectLab = "none",
+                         #selectLab = de_res_ordered[order(de_res_ordered$adj_p_weight), ]$gene_ID[1:40],
+                         drawConnectors = FALSE,
+                         colAlpha = 1.0,
+                         gridlines.major = FALSE,
+                         gridlines.minor = FALSE,
+                         legendPosition = "none",
+                         arrowheads = FALSE,
+                         max.overlaps = 20,
+                         xlim = c(round(min(de_res_ordered$log2FC)) - 0.5, round(max(de_res_ordered$log2FC)) + 0.5),
+                         ylim = c(0, max(-log10(de_res_ordered$adj_p_weight), na.rm = TRUE) + 1),
+                         )
+    volcano_plots_img[[perturbed_gene]] <- p
+    fig_dir = "../figures/in_vitro/iMG/final/"
+    save_pdf_path = paste0(fig_dir, perturbed_gene,"_prot_volcano_iMG_final_corr.pdf")
+    save_svg_path <- file.path(fig_dir, paste0(perturbed_gene, "_prot_volcano_iMG_final_corr.svg"))
+    svglite(save_svg_path, width = 8, height = 8)
+    plot(p)
+    dev.off()
+    
+}
+
+```
+
+
+# Build Heatmap Function
+``` {r build_heatmap_function}
+
+# Function to plot custom complex Heatmap for given target gene
+plot_mixscale_heatmap <- function(target,
+                                  mixscaled_seurat_obj,
+                                  de_res_all_dict,
+                                  fig_dir,
+                                  assay_name = "rna",
+                                  mixscale_col = "mixscale_score",
+                                  perturb_col = "perturbed_gene",
+                                  nt_name = "NTC",
+                                  fdr_cutoff = 0.05,
+                                  gene_col = "gene_ID",
+                                  top_n_pos = 25,
+                                  top_n_neg = 25,
+                                  save_pdf_path = paste0(fig_dir, target, "_", assay, "_mixscale_heatmap_subsampled.pdf"),
+                                  save_svg_path = paste0(fig_dir, target, "_", assay, "mixscale_heatmap_subsampled.svg")
+) {
+  
+  md <- mixscaled_seurat_obj@meta.data
+  stopifnot(
+    "Seurat" %in% class(mixscaled_seurat_obj),
+    assay_name %in% names(mixscaled_seurat_obj@assays),
+    mixscale_col %in% colnames(md),
+    perturb_col %in% colnames(md)
+  )
+    
+  de_res_target <- de_res_all_dict[[target]] %>%
+    filter(!is.na(adj_p_weight), !is.na(log2FC))
+
+  if (nrow(de_res_target) == 0) stop("DE table for target is empty after NA filtering.")
+  
+  # apply FDR filter once
+  de_res_target_sig <- de_res_target %>% filter(adj_p_weight <= fdr_cutoff)
+  
+  # pick top up/down genes
+  top_pos <- de_res_target_sig %>%
+    filter(log2FC > 0) %>%
+    arrange(adj_p_weight, desc(log2FC)) %>%
+    slice_head(n = top_n_pos) %>%
+    pull(.data[[gene_col]])
+
+  top_neg <- de_res_target_sig %>%
+    filter(log2FC < 0) %>%
+    arrange(adj_p_weight, log2FC) %>%
+    slice_head(n = top_n_neg) %>%
+    pull(.data[[gene_col]])
+
+  top_genes <- unique(c(top_pos, top_neg))
+  features  <- unique(c(target, top_genes))
+  all.genes <- c(target, rownames(mixscaled_seurat_obj[[assay_name]]))
+  
+  # Scale only features
+  scaled_mixscaled_seurat_obj <- ScaleData(
+    mixscaled_seurat_obj, assay = assay_name,features = all.genes,
+    #do.center = TRUE, do.scale = TRUE
+    )
+  
+  scaled_features <- rownames(GetAssayData(
+    scaled_mixscaled_seurat_obj,
+    assay = assay_name,
+    slot = "scale.data"
+    ))
+  
+  # assay matrix (log-normalized data)
+  rna_mat <- GetAssayData(scaled_mixscaled_seurat_obj, assay = assay_name, slot = "scale.data")[features, ]
+  rna_mat <- as.matrix(rna_mat)  # ComplexHeatmap wants base matrix
+  
+  # keep only genes that exist
+  features <- intersect(features, rownames(rna_mat))
+  if (length(features) == 0) stop("None of the selected features are present in the assay matrix.")
+  
+  # main heatmap matrix
+  mat <- rna_mat[features, , drop = FALSE]
+  
+  # grouping
+  is_nt          <- md[[perturb_col]] == nt_name
+  is_target_pert <- md[[perturb_col]] == target
+  
+  grp <- rep(NA_character_, ncol(mixscaled_seurat_obj))
+  grp[is_nt]          <- nt_name
+  grp[is_target_pert] <- target
+  
+  mixscore <- suppressWarnings(as.numeric(md[[mixscale_col]]))
+  
+  # keep only labeled columns with non-NA mixscore and matching colnames
+  keep <- !is.na(grp) & is.finite(mixscore) & (mixscore >= 0) & (colnames(mixscaled_seurat_obj) %in% colnames(mat))
+  if (!any(keep)) stop("No cells remain after filtering for groups and mixscale.")
+  
+  grp      <- grp[keep]
+  mixscore <- mixscore[keep]
+  mat      <- mat[, keep, drop = FALSE]
+  
+  # random subsampling to equalize group sizes
+  set.seed(42)  # for reproducibility
+  nt_idx      <- which(grp == nt_name)
+  target_idx  <- which(grp == target)
+  
+  n_to_sample <- min(length(nt_idx), length(target_idx), 1000)
+  
+  nt_idx_sub     <- sample(nt_idx, n_to_sample)
+  target_idx_sub <- sample(target_idx, n_to_sample)
+  
+  sel_idx <- c(nt_idx_sub, target_idx_sub)
+  
+  grp      <- grp[sel_idx]
+  mixscore <- mixscore[sel_idx]
+  mat      <- mat[, sel_idx, drop = FALSE]
+  
+  # order by group, then within group by Mixscale
+  ord <- order(grp, mixscore)
+  grp <- factor(grp[ord], levels = c(nt_name, target))
+  mixscore <- mixscore[ord]
+  mat <- mat[, ord, drop = FALSE]
+  
+  hm_colors <- circlize::colorRamp2(c(-2, 0, 2), c("#FF00FF", "black", "#FFFF00"))
+  grp_levels <- levels(grp)
+  grp_colors <- setNames(c("#CCCCCC", "#9D2937")[seq_along(grp_levels)], grp_levels)
+  
+  #no more clipping
+  #mix_lim <- 2
+  #mixscore_clip <- pmax(pmin(mixscore, mix_lim), -mix_lim)
+  
+  histogram <- HeatmapAnnotation(
+    Group = grp,
+    `Mixscale` = anno_barplot(
+      mixscore,
+      #ylim = c(-mix_lim, mix_lim),
+      baseline = 0,
+      gp = gpar(fill = "grey40", col = NA),
+      border = FALSE,
+      height = unit(12, "mm"),
+      axis_param = list(at = c(round(min(mixscore)), 0, round(max(mixscore))), labels = c(round(min(mixscore)),"0",round(max(mixscore))))
+    ),
+    col = list(Group = grp_colors),
+    annotation_name_side = "left",
+    annotation_legend_param = list(Group = list(title = "Perturbation"))
+  )
+  
+  
+  # row order: put target on top, then top neg, then top pos by DAPs
+  row_order_names <- c(target, setdiff(c(top_neg, top_pos), target))
+  row_order_names <- unique(row_order_names[row_order_names %in% rownames(mat)])
+  
+  mat <- mat[row_order_names, , drop = FALSE]
+  
+  # keep target bold in labels
+  row_names_gp = gpar(fontface = ifelse(rownames(mat) == target, "bold", "plain"))
+
+  ht <- Heatmap(
+    mat,
+    name = "Expression (z)",
+    col = hm_colors,
+    cluster_rows = FALSE,
+    cluster_columns = FALSE,
+    show_column_names = FALSE,
+    show_row_names = TRUE,
+    row_names_gp = gpar(
+      fontface = ifelse(rownames(mat) == target, "bold", "plain")
+    ),
+    column_split = grp,
+    column_gap = unit(c(2, 2), "mm"),
+    top_annotation = histogram,
+    heatmap_legend_param = list(title = "Expression (z)", at = c(-2, -1, 0, 1, 2))
+  )
+  
+  save_svg_path <- file.path(save_svg_path)
+  svglite(save_svg_path, width = 8, height = 8)
+  draw(ht)
+  dev.off()
+
+}
+
+```
+
+# Plot and Save DAP Mixscale Heatmaps
+``` {r deg_heatmaps}
+
+DefaultAssay(prot_img) <- "prot"
+
+for (target in genes_to_include_img) 
+  plot_mixscale_heatmap(target,
+                        mixscaled_seurat_obj = prot_img,
+                        de_res_all_dict = de_res_prot_img_all,
+                        assay = "prot",
+                        fig_dir = "../figures/iMG/final/")
+}
+
+for (target in genes_to_include_itf) {
+  plot_mixscale_heatmap(target,
+                        mixscaled_seurat_obj = prot_itf,
+                        de_res_all_dict = de_res_prot_6tf_all,
+                        assay = "prot",
+                        fig_dir = "../figures/iTF/final/")
+  
+}
+
+```
+
+
